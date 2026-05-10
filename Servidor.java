@@ -51,8 +51,12 @@ public class Servidor {
                             System.out.println("Autenticando usuario: " + paqueteEntrada.getEmisor());
                             break;
                         case "CHAT":
-                            System.out.println("Mensaje de texto de " + paqueteEntrada.getEmisor() + ": "
-                                    + paqueteEntrada.getMensaje());
+                            // Timestamp lógico asignado por el Servidor en el instante de procesamiento.
+                            // Resuelve la ausencia de reloj global: el orden lo impone el nodo central,
+                            // ignorando la hora local de cada cliente (soluciona lag y desfase de relojes).
+                            paqueteEntrada.setTimestamp(System.currentTimeMillis());
+                            System.out.println("[" + paqueteEntrada.getTimestamp() + "] Mensaje de "
+                                    + paqueteEntrada.getEmisor() + ": " + paqueteEntrada.getMensaje());
                             difundirMensaje(paqueteEntrada);
                             break;
                     }

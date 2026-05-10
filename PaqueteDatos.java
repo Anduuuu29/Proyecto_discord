@@ -8,6 +8,7 @@ public class PaqueteDatos implements Serializable {
     private String emisor;
     private String mensaje;
     private byte[] datosVoz;
+    private long timestamp; // Asignado por el Servidor al procesar el paquete (no por el cliente)
 
     public PaqueteDatos(String tipo, String emisor, String mensaje, byte[] datos) {
         this.tipo = tipo;
@@ -30,6 +31,14 @@ public class PaqueteDatos implements Serializable {
 
     public byte[] getDatos() {
         return datosVoz;
+    }
+
+    public long getTimestamp() {
+        return timestamp;
+    }
+
+    public void setTimestamp(long timestamp) {
+        this.timestamp = timestamp;
     }
 
     public void setTipo(String tipo) {
