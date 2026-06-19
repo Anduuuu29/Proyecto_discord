@@ -4,25 +4,75 @@ import java.util.*;
 import java.util.concurrent.*;
 
 public class Servidor {
-    private static final int PUERTO = 5000;
     private static final ExecutorService pool = Executors.newFixedThreadPool(100);
     private static List<ObjectOutputStream> flujoSalidaClientes = Collections.synchronizedList(new ArrayList<>());
+    private static boolean esBackup = false;
+
+    // Buffer de historial para el backup
+    private static List<PaqueteDatos> bufferHistorial = Collections.synchronizedList(new ArrayList<>());
+    private static final int MAX_HISTORIAL = Config.MAX_HISTORIAL_CHAT;
 
     public static void main(String[] args) {
-        try (ServerSocket serverSocket = new ServerSocket(PUERTO)) {
-            System.out.println("Servidor corriendo en el puerto " + PUERTO);
+        esBackup = args.length > 0 && args[0].equalsIgnoreCase("backup");
+        int puerto = esBackup ? Config.PUERTO_BACKUP_TEXTO : Config.PUERTO_PRIMARIO_TEXTO;
+
+        if (esBackup) {
+            iniciarReplicacion();
+        }
+
+        try (ServerSocket serverSocket = new ServerSocket(puerto)) {
+            System.out.println("Servidor de texto " + (esBackup ? "BACKUP" : "PRIMARIO")
+                    + " corriendo en el puerto " + puerto);
 
             while (true) {
                 Socket socketCliente = serverSocket.accept();
                 System.out.println("Cliente conectado desde " + socketCliente.getInetAddress());
-
-                // Thread thread = new Thread(new ManejarCliente(socketCliente));
-                // thread.start();
                 pool.execute(new ManejarCliente(socketCliente));
             }
         } catch (IOException e) {
-            System.out.println("Error de comunicacion con el cliente: " + e.getMessage());
+            System.out.println("Error en el servidor: " + e.getMessage());
         }
+    }
+
+    private static void iniciarReplicacion() {
+        Thread hiloReplicacion = new Thread(() -> {
+            while (true) {
+                try (Socket socket = new Socket(Config.HOST_PRIMARIO_TEXTO, Config.PUERTO_PRIMARIO_TEXTO);
+                     ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
+                     ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
+
+                    PaqueteDatos auth = new PaqueteDatos("AUTH", "BACKUP", "Replicacion en curso", null);
+                    out.writeObject(auth);
+                    out.flush();
+                    System.out.println("Backup conectado al primario para replicacion.");
+
+                    PaqueteDatos paquete;
+                    while ((paquete = (PaqueteDatos) in.readObject()) != null) {
+                        if (paquete.getTipo().equals("CHAT")) {
+                            bufferHistorial.add(paquete);
+                            if (bufferHistorial.size() > MAX_HISTORIAL) {
+                                bufferHistorial.remove(0);
+                            }
+                            // Reenviar a los clientes conectados directamente al backup
+                            difundirMensaje(paquete);
+                        }
+                    }
+                } catch (EOFException | SocketException e) {
+                    System.out.println("Primario no disponible. Backup listo para asumir.");
+                } catch (IOException | ClassNotFoundException e) {
+                    System.out.println("Error en replicacion: " + e.getMessage());
+                }
+
+                try {
+                    Thread.sleep(Config.TIEMPO_RECONEXION_MS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        });
+        hiloReplicacion.setDaemon(true);
+        hiloReplicacion.start();
     }
 
     private static class ManejarCliente implements Runnable {
@@ -42,6 +92,11 @@ public class Servidor {
                 in = new ObjectInputStream(socket.getInputStream());
                 flujoSalidaClientes.add(out);
 
+                // Enviar historial si es backup
+                if (esBackup) {
+                    enviarHistorial();
+                }
+
                 PaqueteDatos paqueteEntrada;
 
                 while ((paqueteEntrada = (PaqueteDatos) in.readObject()) != null) {
@@ -51,16 +106,12 @@ public class Servidor {
                             System.out.println("Autenticando usuario: " + paqueteEntrada.getEmisor());
                             break;
                         case "CHAT":
-                            // Timestamp lógico asignado por el Servidor en el instante de procesamiento.
-                            // Resuelve la ausencia de reloj global: el orden lo impone el nodo central,
-                            // ignorando la hora local de cada cliente (soluciona lag y desfase de relojes).
                             paqueteEntrada.setTimestamp(System.currentTimeMillis());
                             System.out.println("[" + paqueteEntrada.getTimestamp() + "] Mensaje de "
                                     + paqueteEntrada.getEmisor() + ": " + paqueteEntrada.getMensaje());
                             difundirMensaje(paqueteEntrada);
                             break;
                     }
-
                 }
             } catch (EOFException | SocketException e) {
                 System.out.println("Cliente desconectado: " + e.getMessage());
@@ -76,20 +127,37 @@ public class Servidor {
             }
         }
 
-        private void difundirMensaje(PaqueteDatos mensaje) {
-            synchronized (flujoSalidaClientes) {
-                for (ObjectOutputStream out : flujoSalidaClientes) {
+        private void enviarHistorial() {
+            synchronized (bufferHistorial) {
+                for (PaqueteDatos msg : bufferHistorial) {
                     try {
-                        out.writeObject(mensaje);
+                        out.writeObject(msg);
                         out.flush();
                     } catch (IOException e) {
-                        System.out.println("Error enviando mensaje: " + e.getMessage());
+                        break;
                     }
                 }
             }
-
+            if (!bufferHistorial.isEmpty()) {
+                System.out.println("Historial enviado a nuevo cliente: " + bufferHistorial.size() + " mensajes.");
+            }
         }
 
     }
 
+    private static void difundirMensaje(PaqueteDatos mensaje) {
+        synchronized (flujoSalidaClientes) {
+            Iterator<ObjectOutputStream> iter = flujoSalidaClientes.iterator();
+            while (iter.hasNext()) {
+                ObjectOutputStream out = iter.next();
+                try {
+                    out.writeObject(mensaje);
+                    out.flush();
+                } catch (IOException e) {
+                    System.out.println("Error enviando mensaje, eliminando cliente.");
+                    iter.remove();
+                }
+            }
+        }
+    }
 }
