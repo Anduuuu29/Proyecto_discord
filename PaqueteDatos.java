@@ -10,6 +10,7 @@ public class PaqueteDatos implements Serializable {
     private byte[] datosVoz;
     private long timestamp;
     private String sessionId;
+    private String servidorDestino;
 
     public PaqueteDatos(String tipo, String emisor, String mensaje, byte[] datos) {
         this.tipo = tipo;
@@ -64,5 +65,13 @@ public class PaqueteDatos implements Serializable {
 
     public void setSessionId(String sessionId) {
         this.sessionId = sessionId;
+    }
+
+    public String getServidorDestino() {
+        return servidorDestino;
+    }
+
+    public void setServidorDestino(String servidorDestino) {
+        this.servidorDestino = servidorDestino;
     }
 }
