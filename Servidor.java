@@ -11,6 +11,9 @@ public class Servidor {
     private static List<PaqueteDatos> bufferHistorial = Collections.synchronizedList(new ArrayList<>());
     private static final int MAX_HISTORIAL = Config.MAX_HISTORIAL_CHAT;
 
+    private static int relojLamport = 0;
+    private static LogEvento logEventos = new LogEvento();
+
     public static void main(String[] args) {
         esBackup = args.length > 0 && args[0].equalsIgnoreCase("backup");
         int puerto = esBackup ? Config.PUERTO_TEXTO_BACKUP : Config.PUERTO_TEXTO_PRIMARIO;
@@ -48,6 +51,12 @@ public class Servidor {
                     PaqueteDatos paquete;
                     while ((paquete = (PaqueteDatos) in.readObject()) != null) {
                         if (paquete.getTipo().equals("CHAT")) {
+                            if (paquete.getRelojLamport() > relojLamport)
+                                relojLamport = paquete.getRelojLamport();
+                            relojLamport++;
+                            logEventos.registrar(relojLamport,
+                                "ServidorChatBackup", "REPLICAR_CHAT",
+                                paquete.getEmisor() + ": " + paquete.getMensaje());
                             bufferHistorial.add(paquete);
                             if (bufferHistorial.size() > MAX_HISTORIAL) {
                                 bufferHistorial.remove(0);
@@ -98,6 +107,13 @@ public class Servidor {
                             System.out.println("Autenticando conexion: " + paqueteEntrada.getEmisor());
                             break;
                         case "CHAT":
+                            if (paqueteEntrada.getRelojLamport() > relojLamport)
+                                relojLamport = paqueteEntrada.getRelojLamport();
+                            relojLamport++;
+                            paqueteEntrada.setRelojLamport(relojLamport);
+                            logEventos.registrar(relojLamport, "ServidorChat",
+                                "PROCESAR_CHAT", paqueteEntrada.getEmisor()
+                                + ": " + paqueteEntrada.getMensaje());
                             paqueteEntrada.setTimestamp(System.currentTimeMillis());
                             System.out.println("[" + paqueteEntrada.getTimestamp() + "] Chat de "
                                     + paqueteEntrada.getEmisor() + ": " + paqueteEntrada.getMensaje());

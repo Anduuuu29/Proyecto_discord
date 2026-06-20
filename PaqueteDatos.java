@@ -9,6 +9,7 @@ public class PaqueteDatos implements Serializable {
     private String mensaje;
     private byte[] datosVoz;
     private long timestamp;
+    private int relojLamport;
     private String sessionId;
     private String servidorDestino;
 
@@ -73,5 +74,13 @@ public class PaqueteDatos implements Serializable {
 
     public void setServidorDestino(String servidorDestino) {
         this.servidorDestino = servidorDestino;
+    }
+
+    public int getRelojLamport() {
+        return relojLamport;
+    }
+
+    public void setRelojLamport(int relojLamport) {
+        this.relojLamport = relojLamport;
     }
 }

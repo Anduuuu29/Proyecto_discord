@@ -21,6 +21,8 @@ public class Config {
     };
 
     public static final long TIMEOUT_PING_MS = 300;
+    public static final long TIMEOUT_ELECCION_MS = 500;
+    public static final long TIMEOUT_RICART_MS = 1000;
 
     // --- Servidor de Chat ---
     public static final String HOST_TEXTO_PRIMARIO = "localhost";

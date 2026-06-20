@@ -11,7 +11,8 @@ public class Cliente {
 
     private static final String[][] PRINCIPALES = {
         { Config.HOST_PRINCIPAL_PRIMARIO, String.valueOf(Config.PUERTO_PRINCIPAL_PRIMARIO) },
-        { Config.HOST_PRINCIPAL_BACKUP, String.valueOf(Config.PUERTO_PRINCIPAL_BACKUP) }
+        { Config.HOST_PRINCIPAL_BACKUP, String.valueOf(Config.PUERTO_PRINCIPAL_BACKUP) },
+        { "localhost", "5202" }
     };
 
     private static String sessionId;
@@ -19,10 +20,15 @@ public class Cliente {
 
     public static void main(String[] args) {
         Scanner scanner = new Scanner(System.in);
-        System.out.print("Ingrese su nombre de usuario: ");
-        String usuario = scanner.nextLine().trim();
-        if (usuario.isEmpty()) {
-            usuario = "Usuario";
+        String usuario;
+        if (args.length > 0) {
+            usuario = args[0];
+        } else {
+            System.out.print("Ingrese su nombre de usuario: ");
+            usuario = scanner.nextLine().trim();
+            if (usuario.isEmpty()) {
+                usuario = "Usuario";
+            }
         }
 
         while (true) {
@@ -100,6 +106,18 @@ public class Cliente {
                     out.flush();
 
                     PaqueteDatos respuesta = (PaqueteDatos) in.readObject();
+                    if ("NO_COORDINATOR".equals(respuesta.getTipo())) {
+                        String coorId = respuesta.getMensaje();
+                        System.out.println("Redirigiendo al coordinador " + coorId);
+                        socketPrincipal.close();
+                        for (int k = 0; k < PRINCIPALES.length; k++) {
+                            if (PRINCIPALES[k][1].equals(coorId)) {
+                                j = k - 1;
+                                break;
+                            }
+                        }
+                        continue;
+                    }
                     if (!"CONNECT_OK".equals(respuesta.getTipo())) {
                         System.out.println("Error de conexion con ServidorPrincipal.");
                         socketPrincipal.close();
@@ -116,7 +134,8 @@ public class Cliente {
                             while ((paqueteEntrada = (PaqueteDatos) in.readObject()) != null) {
                                 switch (paqueteEntrada.getTipo()) {
                                     case "CHAT":
-                                        System.out.println("[" + paqueteEntrada.getEmisor() + "]: "
+                                        System.out.println("[L" + paqueteEntrada.getRelojLamport()
+                                                + "][" + paqueteEntrada.getEmisor() + "]: "
                                                 + paqueteEntrada.getMensaje());
                                         break;
                                     case "USER_LIST":
@@ -135,6 +154,9 @@ public class Cliente {
                                                 + p2[0] + ":" + p2[1] + " ---");
                                         iniciarClienteVoz(p2[0], p2[1]);
                                         break;
+                                    case "LOG_RESPONSE":
+                                        System.out.println(paqueteEntrada.getMensaje());
+                                        break;
                                 }
                             }
                         } catch (IOException | ClassNotFoundException e) {
@@ -145,6 +167,7 @@ public class Cliente {
 
                     // ── Bucle de envio ──
                     System.out.println("Comandos:");
+                    System.out.println("  /log          - Mostrar log de eventos (Lamport)");
                     System.out.println("  /voz <canal>  - Unirse a canal de voz");
                     System.out.println("  /salir        - Desconectarse");
                     System.out.println("  Cualquier otro texto se envia como mensaje.");
@@ -157,6 +180,17 @@ public class Cliente {
                             detenerClienteVoz();
                             socketPrincipal.close();
                             return;
+                        }
+
+                        if (entrada.equalsIgnoreCase("/log")) {
+                            PaqueteDatos p = new PaqueteDatos("LOG_REQUEST", usuario, "", null);
+                            try {
+                                out.writeObject(p);
+                                out.flush();
+                            } catch (IOException e) {
+                                System.out.println("Error al solicitar log.");
+                            }
+                            continue;
                         }
 
                         if (entrada.startsWith("/voz ")) {
