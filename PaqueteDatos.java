@@ -2,13 +2,14 @@ import java.io.Serializable;
 
 public class PaqueteDatos implements Serializable {
 
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 2L;
 
     private String tipo;
     private String emisor;
     private String mensaje;
     private byte[] datosVoz;
-    private long timestamp; // Asignado por el Servidor al procesar el paquete (no por el cliente)
+    private long timestamp;
+    private String sessionId;
 
     public PaqueteDatos(String tipo, String emisor, String mensaje, byte[] datos) {
         this.tipo = tipo;
@@ -21,16 +22,32 @@ public class PaqueteDatos implements Serializable {
         return tipo;
     }
 
+    public void setTipo(String tipo) {
+        this.tipo = tipo;
+    }
+
     public String getEmisor() {
         return emisor;
+    }
+
+    public void setEmisor(String emisor) {
+        this.emisor = emisor;
     }
 
     public String getMensaje() {
         return mensaje;
     }
 
+    public void setMensaje(String mensaje) {
+        this.mensaje = mensaje;
+    }
+
     public byte[] getDatos() {
         return datosVoz;
+    }
+
+    public void setDatos(byte[] datos) {
+        this.datosVoz = datos;
     }
 
     public long getTimestamp() {
@@ -41,20 +58,11 @@ public class PaqueteDatos implements Serializable {
         this.timestamp = timestamp;
     }
 
-    public void setTipo(String tipo) {
-        this.tipo = tipo;
+    public String getSessionId() {
+        return sessionId;
     }
 
-    public void setEmisor(String emisor) {
-        this.emisor = emisor;
+    public void setSessionId(String sessionId) {
+        this.sessionId = sessionId;
     }
-
-    public void setMensaje(String mensaje) {
-        this.mensaje = mensaje;
-    }
-
-    public void setDatos(byte[] datos) {
-        this.datosVoz = datos;
-    }
-
 }

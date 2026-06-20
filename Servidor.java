@@ -8,13 +8,12 @@ public class Servidor {
     private static List<ObjectOutputStream> flujoSalidaClientes = Collections.synchronizedList(new ArrayList<>());
     private static boolean esBackup = false;
 
-    // Buffer de historial para el backup
     private static List<PaqueteDatos> bufferHistorial = Collections.synchronizedList(new ArrayList<>());
     private static final int MAX_HISTORIAL = Config.MAX_HISTORIAL_CHAT;
 
     public static void main(String[] args) {
         esBackup = args.length > 0 && args[0].equalsIgnoreCase("backup");
-        int puerto = esBackup ? Config.PUERTO_BACKUP_TEXTO : Config.PUERTO_PRIMARIO_TEXTO;
+        int puerto = esBackup ? Config.PUERTO_TEXTO_BACKUP : Config.PUERTO_TEXTO_PRIMARIO;
 
         if (esBackup) {
             iniciarReplicacion();
@@ -37,7 +36,7 @@ public class Servidor {
     private static void iniciarReplicacion() {
         Thread hiloReplicacion = new Thread(() -> {
             while (true) {
-                try (Socket socket = new Socket(Config.HOST_PRIMARIO_TEXTO, Config.PUERTO_PRIMARIO_TEXTO);
+                try (Socket socket = new Socket(Config.HOST_TEXTO_PRIMARIO, Config.PUERTO_TEXTO_PRIMARIO);
                      ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
                      ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
 
@@ -53,7 +52,6 @@ public class Servidor {
                             if (bufferHistorial.size() > MAX_HISTORIAL) {
                                 bufferHistorial.remove(0);
                             }
-                            // Reenviar a los clientes conectados directamente al backup
                             difundirMensaje(paquete);
                         }
                     }
@@ -92,7 +90,6 @@ public class Servidor {
                 in = new ObjectInputStream(socket.getInputStream());
                 flujoSalidaClientes.add(out);
 
-                // Enviar historial si es backup
                 if (esBackup) {
                     enviarHistorial();
                 }

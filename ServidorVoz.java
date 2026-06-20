@@ -8,7 +8,7 @@ public class ServidorVoz {
 
     public static void main(String[] args) {
         boolean esBackup = args.length > 0 && args[0].equalsIgnoreCase("backup");
-        int puerto = esBackup ? Config.PUERTO_BACKUP_VOZ : Config.PUERTO_PRIMARIO_VOZ;
+        int puerto = esBackup ? Config.PUERTO_VOZ_BACKUP : Config.PUERTO_VOZ_PRIMARIO;
 
         try (DatagramSocket socket = new DatagramSocket(puerto)) {
             System.out.println("Servidor de voz " + (esBackup ? "BACKUP" : "PRIMARIO")
@@ -26,6 +26,18 @@ public class ServidorVoz {
 
                 clientes.add(clienteID);
 
+                byte[] datos = paqueteRecibido.getData();
+                int longitud = paqueteRecibido.getLength();
+
+                // PING -> responder PONG solo al emisor (no reenviar a otros)
+                if (longitud == 1 && datos[0] == 0x01) {
+                    byte[] pong = { 0x02 };
+                    DatagramPacket paquetePong = new DatagramPacket(
+                            pong, pong.length, direccionCliente, puertoCliente);
+                    socket.send(paquetePong);
+                    continue;
+                }
+
                 for (String cliente : clientes) {
                     String[] partes = cliente.split(":");
                     InetAddress direccion = InetAddress.getByName(partes[0].replace("/", ""));
@@ -33,11 +45,7 @@ public class ServidorVoz {
 
                     if (!cliente.equals(clienteID)) {
                         DatagramPacket paqueteEnvio = new DatagramPacket(
-                                paqueteRecibido.getData(),
-                                paqueteRecibido.getLength(),
-                                direccion,
-                                puertoDestino
-                        );
+                                datos, longitud, direccion, puertoDestino);
                         socket.send(paqueteEnvio);
                     }
                 }
