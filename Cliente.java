@@ -106,7 +106,8 @@ public class Cliente {
                     out.flush();
 
                     PaqueteDatos respuesta = (PaqueteDatos) in.readObject();
-                    if ("NO_COORDINATOR".equals(respuesta.getTipo())) {
+                    if ("NO_COORDINATOR".equals(respuesta.getTipo())
+                            || "NOT_LEADER".equals(respuesta.getTipo())) {
                         String coorId = respuesta.getMensaje();
                         System.out.println("Redirigiendo al coordinador " + coorId);
                         socketPrincipal.close();

@@ -38,6 +38,16 @@ public class ServidorPrincipal {
     private static Set<String> colaDiferidos = ConcurrentHashMap.newKeySet();
     private static Set<String> respuestasPendientes = ConcurrentHashMap.newKeySet();
 
+    // ─── RAFT ────────────────────────────────────────────────────────
+    private static List<RaftLogEntry> raftLog =
+            Collections.synchronizedList(new ArrayList<>());
+    private static volatile int committedRaftIndex = -1;
+    private static volatile int lastAppliedRaftIndex = -1;
+    private static volatile int currentRaftTerm = 0;
+    private static Set<String> raftAcksPendientes = ConcurrentHashMap.newKeySet();
+    private static Object raftLock = new Object();
+    private static volatile ScheduledExecutorService raftHeartbeatTimer;
+
     // Conexion a ServidorChat
     private static Socket socketChat;
     private static ObjectOutputStream chatOut;
@@ -173,6 +183,8 @@ public class ServidorPrincipal {
         relojLamport++;
         logEventos.registrar(relojLamport, "ServidorPrincipal" + idNodo,
                 "SER_COORDINADOR", "ID=" + idNodo);
+
+        iniciarHeartbeatRaft();
 
         // Notificar a todos los peers
         PaqueteDatos msg = new PaqueteDatos("COORDINATOR", String.valueOf(idNodo),
@@ -369,6 +381,20 @@ public class ServidorPrincipal {
                                     sesiones.put(sid, p.getEmisor());
                                 }
                                 break;
+                            case "RAFT_LOG_SYNC":
+                                RaftLogEntry[] entries = p.getRaftEntries();
+                                if (entries != null) {
+                                    for (RaftLogEntry entry : entries) {
+                                        if (entry.index >= raftLog.size()) {
+                                            raftLog.add(entry);
+                                        }
+                                    }
+                                    System.out.println("Raft: log sincronizado con "
+                                            + entries.length + " entradas del lider");
+                                }
+                                committedRaftIndex = p.getRaftLeaderCommit();
+                                aplicarEntradasPendientes();
+                                break;
                         }
                     }
                 } catch (EOFException | SocketException e) {
@@ -451,8 +477,10 @@ public class ServidorPrincipal {
                     if (idNodo == nuevoCoor) {
                         soyCoordinador = true;
                         if (!chatConectado) conectarServidorChat();
+                        iniciarHeartbeatRaft();
                     } else {
                         soyCoordinador = false;
+                        detenerHeartbeatRaft();
                         conectarCoordinador();
                     }
 
@@ -500,6 +528,13 @@ public class ServidorPrincipal {
                     return;
                 }
 
+                // ── RAFT: recibir AppendEntries (desde el lider) ──
+                if ("RAFT_APPEND_ENTRIES".equals(tipo)) {
+                    manejarAppendEntries(paqueteEntrada, out);
+                    socket.close();
+                    return;
+                }
+
                 // ── BACKUP (observador conectandose al coordinador) ──
                 if ("AUTH".equals(tipo)
                         && "PRINCIPAL_BACKUP".equals(paqueteEntrada.getEmisor())) {
@@ -507,6 +542,7 @@ public class ServidorPrincipal {
                     System.out.println("Observador " + paqueteEntrada.getEmisor()
                             + " conectado para replicacion.");
                     enviarEstadoCompletoSesiones(out);
+                    enviarRaftLogCompleto(out);
                     mantenerBackup();
                     return;
                 }
@@ -547,6 +583,7 @@ public class ServidorPrincipal {
 
                 replicarSesion(sessionId, usuario, "ADD");
                 difundirUSER_LIST();
+                enviarHistorialCliente(out);
 
                 while ((paqueteEntrada = (PaqueteDatos) in.readObject()) != null) {
                     switch (paqueteEntrada.getTipo()) {
@@ -554,6 +591,9 @@ public class ServidorPrincipal {
                             synchronized (lockRicart) {
                                 solicitarSC();
                                 try {
+                                    // Raft: consenso antes de aplicar
+                                    proponerEntradaRaft(paqueteEntrada);
+
                                     relojLamport++;
                                     paqueteEntrada.setRelojLamport(relojLamport);
                                     logEventos.registrar(relojLamport,
@@ -707,5 +747,210 @@ public class ServidorPrincipal {
         } catch (IOException e) {
             System.out.println("Error enviando estado: " + e.getMessage());
         }
+    }
+
+    // ─────────────────── RAFT ────────────────────────────────────────
+
+    private static void proponerEntradaRaft(PaqueteDatos comando) {
+        if (!soyCoordinador) return;
+
+        RaftLogEntry entry = new RaftLogEntry(raftLog.size(), idNodo, comando);
+        raftLog.add(entry);
+
+        System.out.println("Raft: propongo entrada index=" + entry.index);
+
+        relojLamport++;
+        logEventos.registrar(relojLamport, "ServidorPrincipal" + idNodo,
+                "PROPONER_RAFT", "index=" + entry.index);
+
+        int[] peers = obtenerIdsPares();
+        int totalNodos = peers.length + 1;
+        int mayoria = totalNodos / 2 + 1;
+        int acksFaltantes = mayoria - 1;
+
+        raftAcksPendientes.clear();
+        for (int id : peers) {
+            raftAcksPendientes.add(String.valueOf(id));
+        }
+
+        RaftLogEntry[] entriesParaEnviar = new RaftLogEntry[]{entry};
+
+        for (int id : peers) {
+            final int peerId = id;
+            pool.execute(() -> {
+                PaqueteDatos resp = enviarAppendEntries(peerId, entriesParaEnviar, false);
+                if (resp != null && resp.isRaftSuccess()) {
+                    synchronized (raftLock) {
+                        raftAcksPendientes.remove(String.valueOf(peerId));
+                        raftLock.notifyAll();
+                    }
+                }
+            });
+        }
+
+        synchronized (raftLock) {
+            long deadline = System.currentTimeMillis() + Config.TIMEOUT_ELECCION_MS * 2;
+            while (raftAcksPendientes.size() > peers.length - acksFaltantes
+                    && System.currentTimeMillis() < deadline) {
+                try { raftLock.wait(Math.max(1, deadline - System.currentTimeMillis())); }
+                catch (InterruptedException e) { break; }
+            }
+        }
+
+        committedRaftIndex = entry.index;
+        System.out.println("Raft: entrada " + entry.index + " COMMITEADA");
+
+        relojLamport++;
+        logEventos.registrar(relojLamport, "ServidorPrincipal" + idNodo,
+                "CONFIRMAR_RAFT", "entrada " + entry.index + " commiteada");
+    }
+
+    private static PaqueteDatos enviarAppendEntries(int idDestino, RaftLogEntry[] entries, boolean esHeartbeat) {
+        PaqueteDatos pkt = new PaqueteDatos("RAFT_APPEND_ENTRIES",
+                String.valueOf(idNodo), esHeartbeat ? "HEARTBEAT" : "", null);
+
+        int prevLogIndex;
+        int prevLogTerm;
+        if (entries != null && entries.length > 0) {
+            prevLogIndex = entries[0].index - 1;
+        } else {
+            prevLogIndex = raftLog.size() - 1;
+        }
+        if (prevLogIndex >= 0 && prevLogIndex < raftLog.size()) {
+            prevLogTerm = raftLog.get(prevLogIndex).term;
+        } else {
+            prevLogTerm = 0;
+        }
+
+        pkt.setRaftTerm(currentRaftTerm);
+        pkt.setRaftEntries(entries);
+        pkt.setRaftPrevLogIndex(prevLogIndex);
+        pkt.setRaftPrevLogTerm(prevLogTerm);
+        pkt.setRaftLeaderCommit(committedRaftIndex);
+
+        return enviarMensajeSP(idDestino, pkt, true, Config.TIMEOUT_ELECCION_MS);
+    }
+
+    private static void manejarAppendEntries(PaqueteDatos pkt, ObjectOutputStream out) {
+        RaftLogEntry[] entries = pkt.getRaftEntries();
+        int prevLogIndex = pkt.getRaftPrevLogIndex();
+        int prevLogTerm = pkt.getRaftPrevLogTerm();
+        int leaderCommit = pkt.getRaftLeaderCommit();
+
+        boolean consistent = true;
+        if (prevLogIndex >= 0) {
+            if (prevLogIndex >= raftLog.size()) {
+                consistent = false;
+            } else {
+                RaftLogEntry existing = raftLog.get(prevLogIndex);
+                if (existing.term != prevLogTerm) {
+                    consistent = false;
+                }
+            }
+        }
+
+        if (consistent && entries != null) {
+            for (RaftLogEntry entry : entries) {
+                if (entry.index < raftLog.size()) {
+                    if (raftLog.get(entry.index).term != entry.term) {
+                        raftLog.subList(entry.index, raftLog.size()).clear();
+                        raftLog.add(entry);
+                    }
+                } else {
+                    raftLog.add(entry);
+                }
+            }
+
+            if (leaderCommit > committedRaftIndex) {
+                committedRaftIndex = Math.min(leaderCommit, raftLog.size() - 1);
+            }
+
+            aplicarEntradasPendientes();
+
+            System.out.println("Raft: recibidas entradas del lider " + pkt.getEmisor()
+                    + " index=" + (entries.length > 0 ? entries[0].index : "heartbeat"));
+        }
+
+        PaqueteDatos resp = new PaqueteDatos("RAFT_APPEND_ENTRIES_RESPONSE",
+                String.valueOf(idNodo), "", null);
+        resp.setRaftSuccess(consistent);
+        try {
+            out.writeObject(resp);
+            out.flush();
+        } catch (IOException e) {
+            System.out.println("Error respondiendo AppendEntries: " + e.getMessage());
+        }
+    }
+
+    private static void aplicarEntradasPendientes() {
+        while (lastAppliedRaftIndex < committedRaftIndex
+                && lastAppliedRaftIndex + 1 < raftLog.size()) {
+            lastAppliedRaftIndex++;
+            RaftLogEntry entry = raftLog.get(lastAppliedRaftIndex);
+
+            relojLamport++;
+            logEventos.registrar(relojLamport, "ServidorPrincipal" + idNodo,
+                    "APLICAR_RAFT", "aplicando entrada index=" + entry.index);
+
+            PaqueteDatos p = entry.comando;
+            if (p != null) {
+                bufferHistorial.add(p);
+                if (bufferHistorial.size() > Config.MAX_HISTORIAL_CHAT) {
+                    bufferHistorial.remove(0);
+                }
+            }
+        }
+    }
+
+    // ─────────────────── NUEVOS PARA 2.4 ─────────────────────────
+
+    private static void enviarHistorialCliente(ObjectOutputStream out) {
+        synchronized (bufferHistorial) {
+            for (PaqueteDatos msg : bufferHistorial) {
+                try {
+                    out.writeObject(msg);
+                    out.flush();
+                } catch (IOException e) {
+                    break;
+                }
+            }
+        }
+        System.out.println("Historial enviado al cliente (" + bufferHistorial.size() + " mensajes)");
+    }
+
+    private static void enviarRaftLogCompleto(ObjectOutputStream out) {
+        try {
+            PaqueteDatos p = new PaqueteDatos("RAFT_LOG_SYNC",
+                    String.valueOf(idNodo), "", null);
+            p.setRaftEntries(raftLog.toArray(new RaftLogEntry[0]));
+            p.setRaftLeaderCommit(committedRaftIndex);
+            out.writeObject(p);
+            out.flush();
+            System.out.println("Raft: log completo enviado al observador ("
+                    + raftLog.size() + " entradas)");
+        } catch (IOException e) {
+            System.out.println("Error enviando raftLog: " + e.getMessage());
+        }
+    }
+
+    private static void iniciarHeartbeatRaft() {
+        detenerHeartbeatRaft();
+        raftHeartbeatTimer = Executors.newSingleThreadScheduledExecutor();
+        raftHeartbeatTimer.scheduleAtFixedRate(() -> {
+            if (soyCoordinador) {
+                for (int id : obtenerIdsPares()) {
+                    final int peerId = id;
+                    pool.execute(() -> enviarAppendEntries(peerId, null, true));
+                }
+            }
+        }, Config.HEARTBEAT_INTERVALO_MS, Config.HEARTBEAT_INTERVALO_MS, TimeUnit.MILLISECONDS);
+        System.out.println("Raft: heartbeat iniciado");
+    }
+
+    private static void detenerHeartbeatRaft() {
+        if (raftHeartbeatTimer != null) {
+            raftHeartbeatTimer.shutdownNow();
+        }
+        System.out.println("Raft: heartbeat detenido");
     }
 }

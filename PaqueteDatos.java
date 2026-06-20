@@ -13,6 +13,14 @@ public class PaqueteDatos implements Serializable {
     private String sessionId;
     private String servidorDestino;
 
+    // Raft
+    private RaftLogEntry[] raftEntries;
+    private int raftTerm;
+    private int raftPrevLogIndex = -1;
+    private int raftPrevLogTerm;
+    private int raftLeaderCommit = -1;
+    private boolean raftSuccess;
+
     public PaqueteDatos(String tipo, String emisor, String mensaje, byte[] datos) {
         this.tipo = tipo;
         this.emisor = emisor;
@@ -82,5 +90,53 @@ public class PaqueteDatos implements Serializable {
 
     public void setRelojLamport(int relojLamport) {
         this.relojLamport = relojLamport;
+    }
+
+    public RaftLogEntry[] getRaftEntries() {
+        return raftEntries;
+    }
+
+    public void setRaftEntries(RaftLogEntry[] raftEntries) {
+        this.raftEntries = raftEntries;
+    }
+
+    public int getRaftTerm() {
+        return raftTerm;
+    }
+
+    public void setRaftTerm(int raftTerm) {
+        this.raftTerm = raftTerm;
+    }
+
+    public int getRaftPrevLogIndex() {
+        return raftPrevLogIndex;
+    }
+
+    public void setRaftPrevLogIndex(int raftPrevLogIndex) {
+        this.raftPrevLogIndex = raftPrevLogIndex;
+    }
+
+    public int getRaftPrevLogTerm() {
+        return raftPrevLogTerm;
+    }
+
+    public void setRaftPrevLogTerm(int raftPrevLogTerm) {
+        this.raftPrevLogTerm = raftPrevLogTerm;
+    }
+
+    public int getRaftLeaderCommit() {
+        return raftLeaderCommit;
+    }
+
+    public void setRaftLeaderCommit(int raftLeaderCommit) {
+        this.raftLeaderCommit = raftLeaderCommit;
+    }
+
+    public boolean isRaftSuccess() {
+        return raftSuccess;
+    }
+
+    public void setRaftSuccess(boolean raftSuccess) {
+        this.raftSuccess = raftSuccess;
     }
 }
