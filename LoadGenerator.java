@@ -265,6 +265,15 @@ public class LoadGenerator {
                             }
                         } else if ("CONNECT_OK".equals(p.getTipo())) {
                             metrics.registrarReconexion();
+                        } else if ("VOICE_INFO".equals(p.getTipo())) {
+                            String msg = p.getMensaje();
+                            String[] partes = msg.split(":");
+                            if (partes.length >= 3) {
+                                String voiceHost = partes[0];
+                                int voicePort = Integer.parseInt(partes[1]);
+                                String token = partes[2];
+                                startVoiceSimThread(voiceHost, voicePort, token);
+                            }
                         }
                     }
                 } catch (Exception e) {
@@ -272,6 +281,16 @@ public class LoadGenerator {
                 }
             }, "RCV-" + id);
             receiver.start();
+
+            // Unirse a canal de voz simulado para gatillar señalización TCP de tokens
+            try {
+                PaqueteDatos voiceJoin = new PaqueteDatos("VOICE_JOIN", username, "canal_load_" + (id % 5), null);
+                voiceJoin.setSessionId(sessionId);
+                out.writeObject(voiceJoin);
+                out.flush();
+            } catch (Exception e) {
+                System.out.println("Error enviando VOICE_JOIN en carga: " + e.getMessage());
+            }
 
             int seq = 0;
             while (running && testRunning && conectado) {
@@ -296,6 +315,68 @@ public class LoadGenerator {
             }
 
             receiver.interrupt();
+        }
+
+        private void startVoiceSimThread(String host, int puerto, String token) {
+            new Thread(() -> {
+                DatagramSocket udpSocket = null;
+                try {
+                    udpSocket = new DatagramSocket();
+                    udpSocket.setSoTimeout(2000);
+                    InetAddress addr = InetAddress.getByName(host);
+
+                    // Handshake UDP
+                    byte[] tokenBytes = token.getBytes("UTF-8");
+                    byte[] authPayload = new byte[1 + tokenBytes.length];
+                    authPayload[0] = 0x03;
+                    System.arraycopy(tokenBytes, 0, authPayload, 1, tokenBytes.length);
+
+                    DatagramPacket authPacket = new DatagramPacket(authPayload, authPayload.length, addr, puerto);
+                    udpSocket.send(authPacket);
+
+                    byte[] respBuffer = new byte[1];
+                    DatagramPacket resp = new DatagramPacket(respBuffer, respBuffer.length);
+                    udpSocket.receive(resp);
+
+                    if (resp.getLength() == 1 && respBuffer[0] == 0x04) {
+                        udpSocket.setSoTimeout(0);
+                        final DatagramSocket activeSocket = udpSocket;
+                        
+                        // Hilo receptor UDP mock
+                        Thread rcvUdp = new Thread(() -> {
+                            byte[] rcvBuf = new byte[4096];
+                            try {
+                                while (running && conectado) {
+                                    DatagramPacket packet = new DatagramPacket(rcvBuf, rcvBuf.length);
+                                    activeSocket.receive(packet);
+                                }
+                            } catch (Exception e) {}
+                        });
+                        rcvUdp.setDaemon(true);
+                        rcvUdp.start();
+
+                        // Hilo emisor UDP mock (audio y ping)
+                        byte[] audioMock = new byte[512];
+                        audioMock[0] = 0x05; // Código de audio mock
+                        long ultimoPing = 0;
+                        while (running && conectado) {
+                            long ahora = System.currentTimeMillis();
+                            if (ahora - ultimoPing > 1000) {
+                                byte[] ping = { 0x01 };
+                                activeSocket.send(new DatagramPacket(ping, ping.length, addr, puerto));
+                                ultimoPing = ahora;
+                            }
+                            
+                            activeSocket.send(new DatagramPacket(audioMock, audioMock.length, addr, puerto));
+                            Thread.sleep(100);
+                        }
+                    }
+                } catch (Exception e) {
+                    // Falló handshake o se desconectó
+                } finally {
+                    if (udpSocket != null) udpSocket.close();
+                }
+            }, "VC-VOICE-" + id).start();
         }
 
         void cerrarConexion() {

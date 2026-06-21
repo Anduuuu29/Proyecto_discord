@@ -5,11 +5,11 @@ import java.util.concurrent.*;
 
 public class ServidorVoz {
 
-    // Tokens válidos registrados por el ServidorPrincipal (vía TCP)
-    private static Set<String> tokensValidos = ConcurrentHashMap.newKeySet();
+    // Mapea: token -> canal
+    private static Map<String, String> tokenACanal = new ConcurrentHashMap<>();
 
-    // Clientes que ya presentaron un token válido
-    private static Set<String> clientesAutenticados = ConcurrentHashMap.newKeySet();
+    // Mapea: clienteID (IP:puerto) -> canal
+    private static Map<String, String> clienteACanal = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
         boolean esBackup = args.length > 0 && args[0].equalsIgnoreCase("backup");
@@ -22,7 +22,6 @@ public class ServidorVoz {
                 System.out.println("ServidorVoz: Listener TCP de tokens en puerto " + puertoTCP);
                 while (true) {
                     Socket socketPrincipal = serverTCP.accept();
-                    // Cada conexión TCP trae un token para registrar
                     new Thread(() -> {
                         try {
                             BufferedReader reader = new BufferedReader(
@@ -32,11 +31,15 @@ public class ServidorVoz {
 
                             String linea = reader.readLine();
                             if (linea != null && linea.startsWith("REGISTER_TOKEN:")) {
-                                String token = linea.substring("REGISTER_TOKEN:".length());
-                                tokensValidos.add(token);
-                                writer.println("TOKEN_REGISTERED");
-                                System.out.println("Token registrado: " + token
-                                        + " (total: " + tokensValidos.size() + ")");
+                                String resto = linea.substring("REGISTER_TOKEN:".length());
+                                String[] partes = resto.split(":");
+                                if (partes.length >= 2) {
+                                    String token = partes[0];
+                                    String canal = partes[1];
+                                    tokenACanal.put(token, canal);
+                                    writer.println("TOKEN_REGISTERED");
+                                    System.out.println("Token registrado: " + token + " -> canal: " + canal);
+                                }
                             }
 
                             socketPrincipal.close();
@@ -52,7 +55,7 @@ public class ServidorVoz {
         hiloTokens.setDaemon(true);
         hiloTokens.start();
 
-        // ── Bucle UDP principal (igual que antes, pero con validación) ──
+        // ── Bucle UDP principal ──
         try (DatagramSocket socket = new DatagramSocket(puertoUDP)) {
             System.out.println("Servidor de voz " + (esBackup ? "BACKUP" : "PRIMARIO")
                     + " corriendo en el puerto " + puertoUDP);
@@ -70,32 +73,29 @@ public class ServidorVoz {
                 byte[] datos = paqueteRecibido.getData();
                 int longitud = paqueteRecibido.getLength();
 
-                // ── AUTH: paquete 0x03 + token (autenticación del cliente) ──
+                // ── AUTH: paquete 0x03 + token ──
                 if (longitud > 1 && datos[0] == 0x03) {
                     String token = new String(datos, 1, longitud - 1).trim();
-                    if (tokensValidos.contains(token)) {
-                        clientesAutenticados.add(clienteID);
-                        tokensValidos.remove(token); // Token de un solo uso
+                    if (tokenACanal.containsKey(token)) {
+                        String canal = tokenACanal.remove(token);
+                        clienteACanal.put(clienteID, canal);
                         byte[] authOk = { 0x04 };
                         DatagramPacket respuesta = new DatagramPacket(
                                 authOk, authOk.length, direccionCliente, puertoCliente);
                         socket.send(respuesta);
-                        System.out.println("Cliente autenticado: " + clienteID
-                                + " (token: " + token + ")");
+                        System.out.println("Cliente autenticado: " + clienteID + " en canal: " + canal);
                     } else {
-                        System.out.println("Token inválido de " + clienteID
-                                + ": " + token);
+                        System.out.println("Token inválido de " + clienteID + ": " + token);
                     }
                     continue;
                 }
 
                 // ── Rechazar clientes no autenticados ──
-                if (!clientesAutenticados.contains(clienteID)) {
-                    // Ignorar silenciosamente
+                if (!clienteACanal.containsKey(clienteID)) {
                     continue;
                 }
 
-                // ── PING -> responder PONG solo al emisor (no reenviar a otros) ──
+                // ── PING ──
                 if (longitud == 1 && datos[0] == 0x01) {
                     byte[] pong = { 0x02 };
                     DatagramPacket paquetePong = new DatagramPacket(
@@ -104,16 +104,21 @@ public class ServidorVoz {
                     continue;
                 }
 
-                // ── Reenviar audio a todos los clientes autenticados (excepto al emisor) ──
-                for (String cliente : clientesAutenticados) {
-                    String[] partes = cliente.split(":");
-                    InetAddress direccion = InetAddress.getByName(partes[0].replace("/", ""));
-                    int puertoDestino = Integer.parseInt(partes[1]);
+                // ── Reenviar audio solo a los clientes del mismo canal ──
+                String canalEmisor = clienteACanal.get(clienteID);
+                if (canalEmisor != null) {
+                    for (Map.Entry<String, String> entry : clienteACanal.entrySet()) {
+                        String clienteDestino = entry.getKey();
+                        String canalDestino = entry.getValue();
 
-                    if (!cliente.equals(clienteID)) {
-                        DatagramPacket paqueteEnvio = new DatagramPacket(
-                                datos, longitud, direccion, puertoDestino);
-                        socket.send(paqueteEnvio);
+                        if (canalDestino.equals(canalEmisor) && !clienteDestino.equals(clienteID)) {
+                            String[] partes = clienteDestino.split(":");
+                            InetAddress direccion = InetAddress.getByName(partes[0].replace("/", ""));
+                            int puertoDestino = Integer.parseInt(partes[1]);
+                            DatagramPacket paqueteEnvio = new DatagramPacket(
+                                    datos, longitud, direccion, puertoDestino);
+                            socket.send(paqueteEnvio);
+                        }
                     }
                 }
             }

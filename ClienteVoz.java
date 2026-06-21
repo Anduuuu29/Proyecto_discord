@@ -45,47 +45,13 @@ public class ClienteVoz {
             DatagramSocket socket = new DatagramSocket();
 
             // ── Paso 1: Autenticación con token ──
-            boolean autenticado = false;
-            for (int intento = 0; intento < 3; intento++) {
-                System.out.println("Enviando token de autenticación al servidor de voz (intento "
-                        + (intento + 1) + "/3)...");
-
-                // Construir paquete AUTH: byte 0x03 + token en UTF-8
-                byte[] tokenBytes = voiceToken.getBytes("UTF-8");
-                byte[] authPayload = new byte[1 + tokenBytes.length];
-                authPayload[0] = 0x03; // Código de AUTH
-                System.arraycopy(tokenBytes, 0, authPayload, 1, tokenBytes.length);
-
-                DatagramPacket authPacket = new DatagramPacket(
-                        authPayload, authPayload.length,
-                        InetAddress.getByName(direccionHost), puertoHost);
-                socket.send(authPacket);
-
-                // Esperar respuesta AUTH_OK (0x04) con timeout de 3 segundos
-                socket.setSoTimeout(3000);
-                try {
-                    byte[] respBuffer = new byte[1];
-                    DatagramPacket respuesta = new DatagramPacket(respBuffer, respBuffer.length);
-                    socket.receive(respuesta);
-
-                    if (respuesta.getLength() == 1 && respBuffer[0] == 0x04) {
-                        System.out.println("¡Autenticación exitosa! Conexión de voz establecida.");
-                        autenticado = true;
-                        break;
-                    }
-                } catch (java.net.SocketTimeoutException e) {
-                    System.out.println("Timeout esperando AUTH_OK...");
-                }
-            }
+            boolean autenticado = autenticarConServidorVoz(socket, direccionHost, puertoHost, voiceToken);
 
             if (!autenticado) {
-                System.out.println("No se pudo autenticar con el servidor de voz. Abortando.");
+                System.out.println("No se pudo autenticar con el servidor de voz primario. Abortando.");
                 socket.close();
                 return;
             }
-
-            // Quitar el timeout para el funcionamiento normal
-            socket.setSoTimeout(0);
 
             AudioFormat formato = new AudioFormat(
                     16000.0f, 16, 1, true, false
@@ -137,6 +103,7 @@ public class ClienteVoz {
                         if (resp.getAddress().equals(addr) && resp.getPort() == primaryPuerto) {
                             System.out.println("Servidor primario recuperado. Volviendo a "
                                     + primaryHost + ":" + primaryPuerto);
+                            autenticarConServidorVoz(socket, primaryHost, primaryPuerto, voiceToken);
                             direccionHost = primaryHost;
                             puertoHost = primaryPuerto;
                             cambioABackup = false;
@@ -170,10 +137,14 @@ public class ClienteVoz {
                 if (!cambioABackup && ahora - ultimoPaqueteRecibido > Config.TIMEOUT_VOZ_MS) {
                     System.out.println("Servidor primario sin respuesta. Cambiando a backup "
                             + backupHost + ":" + backupPuerto);
-                    direccionHost = backupHost;
-                    puertoHost = backupPuerto;
-                    cambioABackup = true;
-                    ultimoPaqueteRecibido = ahora;
+                    if (autenticarConServidorVoz(socket, backupHost, backupPuerto, voiceToken)) {
+                        direccionHost = backupHost;
+                        puertoHost = backupPuerto;
+                        cambioABackup = true;
+                        ultimoPaqueteRecibido = ahora;
+                    } else {
+                        System.out.println("No se pudo autenticar en el servidor de voz backup.");
+                    }
                 }
 
                 // Enviar audio
@@ -191,5 +162,45 @@ public class ClienteVoz {
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    private static boolean autenticarConServidorVoz(DatagramSocket socket, String host, int puerto, String token) {
+        try {
+            byte[] tokenBytes = token.getBytes("UTF-8");
+            byte[] authPayload = new byte[1 + tokenBytes.length];
+            authPayload[0] = 0x03; // Código de AUTH
+            System.arraycopy(tokenBytes, 0, authPayload, 1, tokenBytes.length);
+
+            InetAddress addr = InetAddress.getByName(host);
+            int timeoutsMax = 3;
+
+            for (int intento = 0; intento < timeoutsMax; intento++) {
+                System.out.println("Enviando token de autenticación a " + host + ":" + puerto 
+                        + " (intento " + (intento + 1) + "/" + timeoutsMax + ")...");
+                
+                DatagramPacket authPacket = new DatagramPacket(
+                        authPayload, authPayload.length, addr, puerto);
+                socket.send(authPacket);
+
+                socket.setSoTimeout(2000);
+                try {
+                    byte[] respBuffer = new byte[1];
+                    DatagramPacket respuesta = new DatagramPacket(respBuffer, respBuffer.length);
+                    socket.receive(respuesta);
+
+                    if (respuesta.getLength() == 1 && respBuffer[0] == 0x04) {
+                        System.out.println("¡Autenticación exitosa en " + host + ":" + puerto + "!");
+                        socket.setSoTimeout(0); // Quitar timeout
+                        return true;
+                    }
+                } catch (java.net.SocketTimeoutException e) {
+                    System.out.println("Timeout esperando AUTH_OK de " + host + ":" + puerto);
+                }
+            }
+        } catch (Exception e) {
+            System.out.println("Error durante la autenticación UDP: " + e.getMessage());
+        }
+        try { socket.setSoTimeout(0); } catch (Exception e) {}
+        return false;
     }
 }

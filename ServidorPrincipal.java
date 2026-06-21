@@ -633,7 +633,7 @@ public class ServidorPrincipal {
                                     .substring(0, Config.VOICE_TOKEN_LONGITUD);
 
                             // Registrar token en ServidorVoz via TCP (señalización)
-                            boolean tokenRegistrado = registrarTokenEnServidorVoz(voiceToken);
+                            boolean tokenRegistrado = registrarTokenEnServidorVoz(voiceToken, canal);
 
                             if (tokenRegistrado) {
                                 String infoVoz = Config.HOST_VOZ_PRIMARIO + ":"
@@ -707,8 +707,9 @@ public class ServidorPrincipal {
 
     // ─────────────────── SEÑALIZACIÓN DE VOZ (TOKENS) ────────────────
 
-    private static boolean registrarTokenEnServidorVoz(String token) {
+    private static boolean registrarTokenEnServidorVoz(String token, String canal) {
         int[] puertos = { Config.PUERTO_VOZ_TOKEN_PRIMARIO, Config.PUERTO_VOZ_TOKEN_BACKUP };
+        boolean registradoEnAlMenosUno = false;
 
         for (int puertoToken : puertos) {
             try (Socket s = new Socket()) {
@@ -717,19 +718,19 @@ public class ServidorPrincipal {
                 BufferedReader reader = new BufferedReader(
                         new InputStreamReader(s.getInputStream()));
 
-                writer.println("REGISTER_TOKEN:" + token);
+                writer.println("REGISTER_TOKEN:" + token + ":" + canal);
                 String respuesta = reader.readLine();
 
                 if ("TOKEN_REGISTERED".equals(respuesta)) {
                     System.out.println("Token registrado en ServidorVoz (puerto " + puertoToken + ")");
-                    return true;
+                    registradoEnAlMenosUno = true;
                 }
             } catch (IOException e) {
                 System.out.println("No se pudo registrar token en ServidorVoz puerto "
                         + puertoToken + ": " + e.getMessage());
             }
         }
-        return false;
+        return registradoEnAlMenosUno;
     }
 
     // ─────────────────── DIFUSION ───────────────────────────────────
@@ -838,6 +839,7 @@ public class ServidorPrincipal {
             });
         }
 
+        boolean quorumAlcanzado = false;
         synchronized (raftLock) {
             long deadline = System.currentTimeMillis() + Config.TIMEOUT_ELECCION_MS * 2;
             while (raftAcksPendientes.size() > peers.length - acksFaltantes
@@ -845,14 +847,21 @@ public class ServidorPrincipal {
                 try { raftLock.wait(Math.max(1, deadline - System.currentTimeMillis())); }
                 catch (InterruptedException e) { break; }
             }
+            quorumAlcanzado = raftAcksPendientes.size() <= peers.length - acksFaltantes;
         }
 
-        committedRaftIndex = entry.index;
-        System.out.println("Raft: entrada " + entry.index + " COMMITEADA");
+        if (quorumAlcanzado) {
+            committedRaftIndex = entry.index;
+            System.out.println("Raft: entrada " + entry.index + " COMMITEADA por quórum");
 
-        relojLamport++;
-        logEventos.registrar(relojLamport, "ServidorPrincipal" + idNodo,
-                "CONFIRMAR_RAFT", "entrada " + entry.index + " commiteada");
+            relojLamport++;
+            logEventos.registrar(relojLamport, "ServidorPrincipal" + idNodo,
+                    "CONFIRMAR_RAFT", "entrada " + entry.index + " commiteada");
+        } else {
+            // Revertir de log local por falta de quórum
+            raftLog.remove(entry.index);
+            System.out.println("Raft: Quórum NO alcanzado para index=" + entry.index + ". Transacción abortada.");
+        }
     }
 
     private static PaqueteDatos enviarAppendEntries(int idDestino, RaftLogEntry[] entries, boolean esHeartbeat) {
