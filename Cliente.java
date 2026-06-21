@@ -145,15 +145,24 @@ public class Cliente {
                                         break;
                                     case "VOICE_INFO":
                                         String[] p1 = paqueteEntrada.getMensaje().split(":");
-                                        System.out.println("\n--- Conectando a voz: "
-                                                + p1[0] + ":" + p1[1] + " ---");
-                                        iniciarClienteVoz(p1[0], p1[1]);
+                                        if (p1.length >= 3) {
+                                            System.out.println("\n--- Conectando a voz: "
+                                                    + p1[0] + ":" + p1[1]
+                                                    + " (token: " + p1[2] + ") ---");
+                                            iniciarClienteVoz(p1[0], p1[1], p1[2]);
+                                        } else {
+                                            System.out.println("\n--- Error de voz: "
+                                                    + paqueteEntrada.getMensaje() + " ---");
+                                        }
                                         break;
                                     case "VOICE_SWITCH":
                                         String[] p2 = paqueteEntrada.getMensaje().split(":");
-                                        System.out.println("\n--- Servidor de voz cambiado a: "
-                                                + p2[0] + ":" + p2[1] + " ---");
-                                        iniciarClienteVoz(p2[0], p2[1]);
+                                        if (p2.length >= 3) {
+                                            System.out.println("\n--- Servidor de voz cambiado a: "
+                                                    + p2[0] + ":" + p2[1]
+                                                    + " (token: " + p2[2] + ") ---");
+                                            iniciarClienteVoz(p2[0], p2[1], p2[2]);
+                                        }
                                         break;
                                     case "LOG_RESPONSE":
                                         System.out.println(paqueteEntrada.getMensaje());
@@ -239,16 +248,17 @@ public class Cliente {
         scanner.close();
     }
 
-    private static void iniciarClienteVoz(String host, String puerto) {
+    private static void iniciarClienteVoz(String host, String puerto, String token) {
         detenerClienteVoz();
         try {
             String javaBin = System.getProperty("java.home") + File.separator
                     + "bin" + File.separator + "java";
             ProcessBuilder pb = new ProcessBuilder(
-                    javaBin, "-cp", ".", "ClienteVoz", host, puerto);
+                    javaBin, "-cp", ".", "ClienteVoz", host, puerto, token);
             pb.inheritIO();
             procesoVoz = pb.start();
-            System.out.println("Cliente de voz iniciado en " + host + ":" + puerto);
+            System.out.println("Cliente de voz iniciado en " + host + ":" + puerto
+                    + " (token: " + token + ")");
         } catch (IOException e) {
             System.out.println("Error al iniciar ClienteVoz: " + e.getMessage());
         }

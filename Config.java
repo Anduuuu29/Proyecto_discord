@@ -38,6 +38,11 @@ public class Config {
     public static final String HOST_VOZ_BACKUP = "localhost";
     public static final int PUERTO_VOZ_BACKUP = 6001;
 
+    // --- Tokens de Voz (Señalización) ---
+    public static final int PUERTO_VOZ_TOKEN_PRIMARIO = 6010;
+    public static final int PUERTO_VOZ_TOKEN_BACKUP = 6011;
+    public static final int VOICE_TOKEN_LONGITUD = 8;
+
     // --- Timeouts ---
     public static final long TIEMPO_RECONEXION_MS = 2000;
     public static final long TIMEOUT_VOZ_MS = 600;

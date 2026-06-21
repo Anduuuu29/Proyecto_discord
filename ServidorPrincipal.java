@@ -628,13 +628,36 @@ public class ServidorPrincipal {
 
                         case "VOICE_JOIN":
                             String canal = paqueteEntrada.getMensaje();
-                            String infoVoz = Config.HOST_VOZ_PRIMARIO + ":"
-                                    + Config.PUERTO_VOZ_PRIMARIO;
-                            PaqueteDatos vozInfo = new PaqueteDatos("VOICE_INFO",
-                                    "ServidorPrincipal", infoVoz, null);
-                            out.writeObject(vozInfo);
-                            out.flush();
-                            System.out.println(usuario + " se unio al canal de voz: " + canal);
+                            // Generar token de voz
+                            String voiceToken = UUID.randomUUID().toString()
+                                    .substring(0, Config.VOICE_TOKEN_LONGITUD);
+
+                            // Registrar token en ServidorVoz via TCP (señalización)
+                            boolean tokenRegistrado = registrarTokenEnServidorVoz(voiceToken);
+
+                            if (tokenRegistrado) {
+                                String infoVoz = Config.HOST_VOZ_PRIMARIO + ":"
+                                        + Config.PUERTO_VOZ_PRIMARIO + ":" + voiceToken;
+                                PaqueteDatos vozInfo = new PaqueteDatos("VOICE_INFO",
+                                        "ServidorPrincipal", infoVoz, null);
+                                out.writeObject(vozInfo);
+                                out.flush();
+                                System.out.println(usuario + " se unio al canal de voz: "
+                                        + canal + " (token: " + voiceToken + ")");
+
+                                relojLamport++;
+                                logEventos.registrar(relojLamport,
+                                    "ServidorPrincipal" + idNodo, "VOICE_TOKEN_GENERADO",
+                                    "usuario=" + usuario + " token=" + voiceToken);
+                            } else {
+                                PaqueteDatos vozError = new PaqueteDatos("VOICE_INFO",
+                                        "ServidorPrincipal",
+                                        "ERROR:No se pudo registrar token de voz", null);
+                                out.writeObject(vozError);
+                                out.flush();
+                                System.out.println("Error registrando token de voz para "
+                                        + usuario);
+                            }
                             break;
 
                         case "VOICE_LEAVE":
@@ -680,6 +703,33 @@ public class ServidorPrincipal {
                 }
             }
         }
+    }
+
+    // ─────────────────── SEÑALIZACIÓN DE VOZ (TOKENS) ────────────────
+
+    private static boolean registrarTokenEnServidorVoz(String token) {
+        int[] puertos = { Config.PUERTO_VOZ_TOKEN_PRIMARIO, Config.PUERTO_VOZ_TOKEN_BACKUP };
+
+        for (int puertoToken : puertos) {
+            try (Socket s = new Socket()) {
+                s.connect(new InetSocketAddress(Config.HOST_VOZ_PRIMARIO, puertoToken), 2000);
+                PrintWriter writer = new PrintWriter(s.getOutputStream(), true);
+                BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(s.getInputStream()));
+
+                writer.println("REGISTER_TOKEN:" + token);
+                String respuesta = reader.readLine();
+
+                if ("TOKEN_REGISTERED".equals(respuesta)) {
+                    System.out.println("Token registrado en ServidorVoz (puerto " + puertoToken + ")");
+                    return true;
+                }
+            } catch (IOException e) {
+                System.out.println("No se pudo registrar token en ServidorVoz puerto "
+                        + puertoToken + ": " + e.getMessage());
+            }
+        }
+        return false;
     }
 
     // ─────────────────── DIFUSION ───────────────────────────────────
