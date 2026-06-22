@@ -15,10 +15,10 @@ java ServidorPrincipal
 java ServidorPrincipal backup
 
 # Iniciar ServidorChat
-java ServidorChat
+java Servidor
 
 # Iniciar ServidorChat BACKUP
-java ServidorChat backup
+java Servidor backup
 
 # Iniciar ServidorVoz
 java ServidorVoz
